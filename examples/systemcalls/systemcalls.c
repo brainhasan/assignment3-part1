@@ -1,105 +1,163 @@
-// examples/systemcalls/systemcalls.c
-
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <stdbool.h>
-#include <stdio.h>
+#include "systemcalls.h"
 
 /**
- * Führt einen Shell-Befehl mittels system() aus.
- */
+ * @param cmd the command to execute with system()
+ * @return true if the command in @param cmd was executed
+ *   successfully using the system() call, false if an error occurred,
+ *   either in invocation of the system() call, or if a non-zero return
+ *   value was returned by the command issued in @param cmd.
+*/
 bool do_system(const char *cmd)
 {
-    if (cmd == NULL) {
-        return false;
-    }
+    int retVal = false;
+    
+    retVal = system(cmd);
 
-    int ret = system(cmd);
-    if (ret == -1) {
-        return false;
-    }
-    // system() gibt den Beendigungsstatus zurück in Form (exit_status << 8), ggf weitere bits
-    // Hier prüfen wir, ob der Prozess normal beendet wurde und mit Status 0
-    return WIFEXITED(ret) && WEXITSTATUS(ret) == 0;
+    // if retval is -1 it is an error, so if it is not -1, return true (no error)
+    return (retVal != -1);
 }
 
 /**
- * Führt execv aus. args[...] muss count Argumente enthalten und args[count] == NULL setzen.
- */
-bool do_exec(int count, char *args[])
+* @param count -The numbers of variables passed to the function. The variables are command to execute.
+*   followed by arguments to pass to the command
+*   Since exec() does not perform path expansion, the command to execute needs
+*   to be an absolute path.
+* @param ... - A list of 1 or more arguments after the @param count argument.
+*   The first is always the full path to the command to execute with execv()
+*   The remaining arguments are a list of arguments to pass to the command in execv()
+* @return true if the command @param ... with arguments @param arguments were executed successfully
+*   using the execv() call, false if an error occurred, either in invocation of the
+*   fork, waitpid, or execv() command, or if a non-zero return value was returned
+*   by the command issued in @param arguments with the specified arguments.
+*/
+
+bool do_exec(int count, ...)
 {
-    if (count < 1 || args == NULL) {
+    va_list args;
+    va_start(args, count);
+    char * command[count+1];
+    int i;
+    pid_t process_id;
+    int wstatus;
+    int retVali = 0;
+    bool retvalb = true;
+
+    for(i=0; i<count; i++)
+    {
+        command[i] = va_arg(args, char *);
+    }
+    command[count] = NULL;
+
+    process_id = fork();
+
+    // pid of -1 means it errored out
+    if(process_id == -1)
+    {
         return false;
     }
-
-    // args muss NULL-terminiert sein
-    // Stelle sicher, dass args[count] == NULL
-    args[count] = NULL;
-
-    pid_t pid = fork();
-    if (pid == -1) {
-        perror("fork failed");
-        return false;
-    }
-    if (pid == 0) {
-        // Kindprozess
-        execv(args[0], args);
-        perror("execv failed");
-        exit(EXIT_FAILURE);
-    } else {
-        // Elternprozess
-        int status;
-        if (waitpid(pid, &status, 0) == -1) {
-            perror("waitpid failed");
-            return false;
+    // pid of 0 means child
+    else if(process_id == 0)
+    {
+        retVali = execv(command[0], command);
+        if(retVali == -1)
+        {
+            exit(1);
         }
-        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
     }
+    // pid of non zero means parent
+    else
+    {
+        if(wait(&wstatus) == -1)
+        {
+            retvalb = false;
+        }
+        
+        
+        // if the child returned or exited
+        if(WIFEXITED(wstatus))
+        {
+            // if the child returned with something other then 0
+            if(WEXITSTATUS(wstatus))
+            {
+                retvalb = false;
+            }
+        }
+    }
+
+    va_end(args);
+
+    return retvalb;
 }
 
 /**
- * Führt execv aus und leitet stdout auf outputfile um. args muss count Argumente + NULL-Terminator haben.
- */
-bool do_exec_redirect(const char *outputfile, int count, char *args[])
+* @param outputfile - The full path to the file to write with command output.
+*   This file will be closed at completion of the function call.
+* All other parameters, see do_exec above
+*/
+bool do_exec_redirect(const char *outputfile, int count, ...)
 {
-    if (outputfile == NULL || count < 1 || args == NULL) {
-        return false;
+    va_list args;
+    va_start(args, count);
+    char * command[count+1];
+    int i;
+    pid_t process_id;
+    int wstatus;
+    int retVali = 0;
+    bool retvalb = true;
+
+    for(i=0; i<count; i++)
+    {
+        command[i] = va_arg(args, char *);
     }
 
-    args[count] = NULL;  // NULL-terminierung
+    command[count] = NULL;
 
-    pid_t pid = fork();
-    if (pid == -1) {
-        perror("fork failed");
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+
+    process_id = fork();
+
+    // pid of -1 means it errored out
+    if(process_id == -1)
+    {
         return false;
     }
-    if (pid == 0) {
-        // Kindprozess
-        int fd = open(outputfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) {
-            perror("open failed");
-            exit(EXIT_FAILURE);
-        }
-
-        if (dup2(fd, STDOUT_FILENO) < 0) {
-            perror("dup2 failed");
-            close(fd);
-            exit(EXIT_FAILURE);
+    // pid of 0 means child
+    else if(process_id == 0)
+    {
+        if(dup2(fd, STDOUT_FILENO) == -1)
+        {
+            exit(1);
         }
         close(fd);
-
-        execv(args[0], args);
-        perror("execv failed");
-        exit(EXIT_FAILURE);
-    } else {
-        int status;
-        if (waitpid(pid, &status, 0) == -1) {
-            perror("waitpid failed");
-            return false;
+        retVali = execv(command[0], command);
+        if(retVali == -1)
+        {
+            exit(1);
         }
-        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
     }
-}
+    // pid of non zero means parent
+    else
+    {
+        if(wait(&wstatus) == -1)
+        {
+            retvalb = false;
+        }
+        
+        
+        // if the child returned or exited
+        if(WIFEXITED(wstatus))
+        {
+            // if the child returned with something other then 0
+            if(WEXITSTATUS(wstatus))
+            {
+                retvalb = false;
+            }
+        }
+    }
 
+    close(fd);
+
+    va_end(args);
+
+    return retvalb;
+}

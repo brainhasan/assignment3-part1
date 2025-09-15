@@ -4,12 +4,9 @@
 # Automate these steps from the readme:
 # Create a build subdirectory, change into it, run
 # cmake .. && make && run the assignment-autotest application
-
-
-
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Debug .
+cmake ..
 make clean
 make
 cd ..
